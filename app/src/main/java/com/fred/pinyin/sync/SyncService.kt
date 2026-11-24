@@ -14,7 +14,7 @@ class SyncService(private val store: ProgressStore, private val prefs: SyncPrefs
             val merged = Merge.merge(store.all(), remote)
 
             if (merged != remote) dav.put(merged)
-            store.replaceAll(merged)
+            store.replaceSynced(merged)
             prefs.lastSyncAt = System.currentTimeMillis()
             "同步完成"
         } catch (e: Exception) {

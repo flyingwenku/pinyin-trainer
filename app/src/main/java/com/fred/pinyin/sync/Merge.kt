@@ -113,6 +113,42 @@ object Merge {
         return serialize(out)
     }
 
+    /**
+     * 落盘前标注本地变更：变化的记录打当前时间戳，消失的记录转墓碑。
+     * 与 PC 端 annotate_local 完全对齐。注意同步下来的merged不能走这里，
+     * 否则远端记录的 updatedAt 会被改成“现在”，另一端再也合并不回来。
+     */
+    fun annotate(oldJson: String, newJson: String): String {
+        val old = parse(oldJson)
+        val fresh = parse(newJson)
+        val now = System.currentTimeMillis()
+        val out = LinkedHashMap<String, Entry>()
+        for ((key, e) in fresh) {
+            val prior = old[key]
+            if (prior == null || prior.value != e.value || prior.deleted) {
+                val value = withUpdatedAt(e.value, now)
+                out[key] = Entry(value, now, false)
+            } else {
+                out[key] = e
+            }
+        }
+        for ((key, e) in old) {
+            if (!fresh.containsKey(key) && !e.deleted) {
+                val value = "{\"deleted\":true,\"updatedAt\":$now}"
+                out[key] = Entry(value, now, true)
+            }
+        }
+        return serialize(out)
+    }
+
+    private fun withUpdatedAt(value: String, now: Long): String {
+        val match = Regex("\"updatedAt\"\\s*:\\s*-?\\d+").find(value)
+        if (match != null) return value.replaceRange(match.range, "\"updatedAt\":$now")
+        val end = value.lastIndexOf('}')
+        return if (end < 0) value else
+            value.substring(0, end) + ",\"updatedAt\":$now" + value.substring(end)
+    }
+
     private fun newer(a: Entry, b: Entry): Boolean =
         if (a.updatedAt != b.updatedAt) a.updatedAt > b.updatedAt else a.value > b.value
 

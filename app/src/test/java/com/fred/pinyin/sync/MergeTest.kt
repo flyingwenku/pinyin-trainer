@@ -73,6 +73,29 @@ class MergeTest {
     }
 
     @Test
+    fun `annotate stamps changed record but leaves untouched one`() {
+        val old = doc(
+            "甲" to rec("甲", 1000),
+            "乙" to rec("乙", 1000)
+        )
+        val fresh = doc(
+            "甲" to rec("甲改", 1000),
+            "乙" to rec("乙", 1000)
+        )
+        val out = Merge.parse(Merge.annotate(old, fresh))
+        assertTrue(out["甲"]!!.updatedAt > 1000)
+        assertEquals(1000L, out["乙"]!!.updatedAt)
+    }
+
+    @Test
+    fun `annotate turns removed record into tombstone`() {
+        val old = doc("甲" to rec("甲", 1000))
+        val out = Merge.parse(Merge.annotate(old, "{}"))
+        assertTrue(out["甲"]!!.deleted)
+        assertTrue(out["甲"]!!.updatedAt > 1000)
+    }
+
+    @Test
     fun `merged keys are sorted ascending`() {
         val mine = doc("c" to rec("c", now), "a" to rec("a", now))
         val theirs = doc("b" to rec("b", now))
