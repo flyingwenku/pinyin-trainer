@@ -144,6 +144,7 @@ const state = {
   wrong: 0,
   guess: 0,
   answered: false,
+  seenMap: {},
   recordMap: loadRecord(),
 };
 
@@ -168,7 +169,7 @@ function saveSession(){
     localStorage.setItem(SESSION_KEY, JSON.stringify({
       group: state.group, filter: state.filter,
       right: state.right, wrong: state.wrong, guess: state.guess,
-      idx: state.idx, queue: state.queue.map(q => q.c)
+      idx: state.idx, seen: Object.keys(state.seenMap), queue: state.queue.map(q => q.c)
     }));
   }catch(e){}
 }
@@ -187,6 +188,9 @@ function restoreSession(){
   state.guess = s.guess || 0;
   state.queue = queue;
   state.idx = Math.min(Math.max(s.idx || 0, 0), queue.length - 1);
+  state.viewPos = state.idx;
+  state.seenMap = {};
+  (s.seen || []).forEach(c => { state.seenMap[c] = 1; });
   return true;
 }
 function clearSession(){ try{ localStorage.removeItem(SESSION_KEY); }catch(e){} }
@@ -250,7 +254,7 @@ function buildQueue(){
     merged = pool;
   }
   state.queue = merged;
-  state.idx = 0; state.right = 0; state.wrong = 0; state.guess = 0;
+  state.idx = 0; state.viewPos = 0; state.right = 0; state.wrong = 0; state.guess = 0; state.seenMap = {};
 }
 
 /* ---------- 渲染 ---------- */
@@ -286,7 +290,9 @@ function norm(s){ return (s||'').toLowerCase().replace(/[^a-z]/g,''); }
 
 /* 从当前位置往后找第一道属于当前视图的题；队列始终是全集，视图只是筛选镜头 */
 function nextInView(from){
-  for(let i=from;i<state.queue.length;i++){
+  const n = state.queue.length;
+  for(let k=0;k<n;k++){
+    const i = (from + k) % n;
     if(matchGroup(state.queue[i])) return i;
   }
   return -1;
@@ -310,10 +316,10 @@ function switchView(g, f){
 }
 
 function showCard(){
-  const hit = nextInView(state.idx);
+  const hit = nextInView(state.viewPos === undefined ? state.idx : state.viewPos);
   if(hit < 0){ showResult(); return; }
-  state.idx = hit;
-  state.current = state.queue[state.idx];
+  state.viewPos = hit;
+  state.current = state.queue[hit];
   state.answered = false;
   $('charEl').textContent = state.current.c;
   $('hintEl').textContent = '输入该字拼音（不带声调）';
@@ -333,21 +339,25 @@ function updateStats(){
   $('sRight').textContent = state.right;
   $('sGuess').textContent = state.guess;
   $('sWrong').textContent = state.wrong;
-  $('sProg').textContent = Math.min(state.idx+1, state.queue.length) + '/' + state.queue.length;
-  $('barFill').style.width = state.queue.length ? (state.idx/state.queue.length*100)+'%' : '0';
+  const learned = Object.keys(state.seenMap).length;
+  $('sProg').textContent = Math.min(learned, state.queue.length) + '/' + state.queue.length;
+  $('barFill').style.width = state.queue.length ? (Math.min(learned, state.queue.length)/state.queue.length*100)+'%' : '0';
   saveSession();
 }
 
 /* 待复习题动态回流：从后续队列去掉旧位置，插到当前题之后随机 2~6 题处 */
+function curPos(){ return state.viewPos === undefined ? state.idx : state.viewPos; }
 function requeueReview(it){
-  state.queue = state.queue.filter((q,i)=>!(i>state.idx && q.c===it.c));
+  const at = curPos();
+  state.queue = state.queue.filter((q,i)=>!(i>at && q.c===it.c));
   const gap = 2 + Math.floor(Math.random()*5);
-  const pos = Math.min(state.idx + 1 + gap, state.queue.length);
+  const pos = Math.min(at + 1 + gap, state.queue.length);
   state.queue.splice(pos, 0, it);
 }
 /* 已掌握：从后续队列移除 */
 function dropFromQueue(it){
-  state.queue = state.queue.filter((q,i)=>!(i>state.idx && q.c===it.c));
+  const at = curPos();
+  state.queue = state.queue.filter((q,i)=>!(i>at && q.c===it.c));
 }
 
 function submit(){
@@ -357,6 +367,7 @@ function submit(){
   const it = state.current;
   const ok = it.a.includes(input);
   state.answered = true;
+  state.seenMap[it.c] = 1;
   const fb = $('feedback');
   if(ok){
     const r = ensureRecord(it);
@@ -406,7 +417,8 @@ function resolveRight(guess){
 }
 
 function next(){
-  state.idx++;
+  state.idx = (state.viewPos === undefined ? state.idx : state.viewPos) + 1;
+  state.viewPos = state.idx;
   showCard();
 }
 
