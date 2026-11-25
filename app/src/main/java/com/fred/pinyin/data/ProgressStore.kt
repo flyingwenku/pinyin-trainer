@@ -69,10 +69,8 @@ class ProgressStore(context: Context) {
         val t0 = System.currentTimeMillis()
         logger?.invoke("store write start bytes=${text.length}")
         val tJson = System.currentTimeMillis()
-        try {
-            JSONObject(text)
-        } catch (e: Exception) {
-            logger?.invoke("store write invalid json: ${e.message ?: "unknown"}")
+        if (!text.endsWith("}")) {
+            logger?.invoke("store write invalid json")
             return
         }
         val jsonMs = System.currentTimeMillis() - tJson

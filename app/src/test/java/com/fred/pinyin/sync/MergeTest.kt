@@ -101,4 +101,24 @@ class MergeTest {
         val theirs = doc("b" to rec("b", now))
         assertEquals("""{"a":${rec("a", now)},"b":${rec("b", now)},"c":${rec("c", now)}}""", Merge.merge(mine, theirs))
     }
+
+    @Test
+    fun `annotate ignores timestamp-only difference and keeps old timestamp`() {
+        val old = doc("甲" to """{"c":"甲","remain":3,"updatedAt":1000}""")
+        val fresh = doc("甲" to """{"c":"甲","remain":3}""")
+        val result = Merge.annotateDetailed(old, fresh)
+        assertEquals(0, result.changed)
+        val out = Merge.parse(result.json)
+        assertEquals(1000L, out["甲"]!!.updatedAt)
+        assertTrue(out["甲"]!!.value.contains("\"remain\":3"))
+    }
+
+    @Test
+    fun `annotate counts only actual content change`() {
+        val old = doc("甲" to """{"c":"甲","remain":3,"updatedAt":1000}""")
+        val fresh = doc("甲" to """{"c":"甲","remain":2}""")
+        val result = Merge.annotateDetailed(old, fresh)
+        assertEquals(1, result.changed)
+        assertEquals(0, result.tombstoned)
+    }
 }

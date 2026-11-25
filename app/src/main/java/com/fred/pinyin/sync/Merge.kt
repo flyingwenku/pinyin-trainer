@@ -15,6 +15,7 @@ object Merge {
     private val UPDATED_AT_FIELD = Regex("\"updatedAt\"\\s*:\\s*(-?\\d+)")
     private val DELETED_FIELD = Regex("\"deleted\"\\s*:\\s*true")
     private val UPDATED_AT_ANY = Regex("\"updatedAt\"\\s*:\\s*-?\\d+")
+    private val UPDATED_AT_WITH_COMMA = Regex(",\\s*\"updatedAt\"\\s*:\\s*-?\\d+")
 
     fun parse(json: String): Map<String, Entry> {
         val out = LinkedHashMap<String, Entry>()
@@ -136,12 +137,12 @@ object Merge {
         var tombstoned = 0
         for ((key, e) in fresh) {
             val prior = old[key]
-            if (prior == null || prior.value != e.value || prior.deleted) {
+            if (prior == null || !sameContent(prior.value, e.value) || prior.deleted) {
                 val value = withUpdatedAt(e.value, now)
                 out[key] = Entry(value, now, false)
                 changed++
             } else {
-                out[key] = e
+                out[key] = prior
             }
         }
         for ((key, e) in old) {
@@ -153,6 +154,9 @@ object Merge {
         }
         return AnnotateResult(serialize(out), changed, tombstoned)
     }
+
+    private fun sameContent(a: String, b: String): Boolean =
+        UPDATED_AT_WITH_COMMA.replace(a, "") == UPDATED_AT_WITH_COMMA.replace(b, "")
 
     private fun withUpdatedAt(value: String, now: Long): String {
         val match = UPDATED_AT_ANY.find(value)
