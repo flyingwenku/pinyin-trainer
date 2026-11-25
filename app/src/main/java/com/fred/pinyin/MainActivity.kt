@@ -124,7 +124,7 @@ class MainActivity : Activity() {
             .setView(box)
             .setPositiveButton("复制") { _, _ ->
                 val clip = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-                clip.primaryClip = ClipData.newPlainText("pinyin-debug-log", box.text.toString())
+                clip.setPrimaryClip(ClipData.newPlainText("pinyin-debug-log", box.text.toString()))
                 Toast.makeText(this, "日志已复制", Toast.LENGTH_SHORT).show()
             }
             .setNeutralButton("清空") { _, _ ->
