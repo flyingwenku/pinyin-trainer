@@ -6,8 +6,6 @@ import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.text.InputType
 import android.view.Menu
 import android.webkit.JavascriptInterface
@@ -27,8 +25,6 @@ class MainActivity : Activity() {
     private lateinit var prefs: SyncPrefs
     private lateinit var logStore: AppLog
     private lateinit var web: WebView
-    private val handler = Handler(Looper.getMainLooper())
-    private val syncRunnable = Runnable { doSync() }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -37,6 +33,7 @@ class MainActivity : Activity() {
         store = ProgressStore(this)
         prefs = SyncPrefs(this)
         logStore = AppLog(this)
+        store.logger = { logStore.add(it) }
         logStore.add("app start")
 
         web = WebView(this)
@@ -50,14 +47,6 @@ class MainActivity : Activity() {
         }
         web.loadUrl("file:///android_asset/index.html")
         setContentView(web)
-    }
-
-    /** 30 分钟兜底同步：从后台回到前台时补一次，避免用户一直不点「同步」 */
-    override fun onResume() {
-        super.onResume()
-        if (prefs.ready && System.currentTimeMillis() - prefs.lastSyncAt > 30 * 60 * 1000L) {
-            doSync()
-        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu?): Boolean {
@@ -151,10 +140,8 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun saveProgress(json: String) {
             val t0 = System.currentTimeMillis()
-            store.replaceAll(json)
-            logStore.add("bridge saveProgress bytes=${json.length} ms=${System.currentTimeMillis() - t0}")
-            handler.removeCallbacks(syncRunnable)
-            handler.postDelayed(syncRunnable, 10_000)
+            store.saveAsync(json)
+            logStore.add("bridge saveProgress queued bytes=${json.length} ms=${System.currentTimeMillis() - t0}")
         }
 
         @JavascriptInterface

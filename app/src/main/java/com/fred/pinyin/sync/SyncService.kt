@@ -16,6 +16,7 @@ class SyncService(
         }
         val dav = WebDav(prefs.url, prefs.user, prefs.password)
         return try {
+            store.flush()
             val local = store.all()
             log("sync start localChars=${Merge.parse(local).size} localBytes=${local.length}")
             val fetched = dav.fetch()
