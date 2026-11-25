@@ -11,11 +11,8 @@ object Merge {
     data class Entry(val value: String, val updatedAt: Long, val deleted: Boolean)
     data class AnnotateResult(val json: String, val changed: Int, val tombstoned: Int)
 
-    // 避免每条记录都重新编译正则；这是全量标注的主要热点。
-    private val UPDATED_AT_FIELD = Regex("\"updatedAt\"\\s*:\\s*(-?\\d+)")
-    private val DELETED_FIELD = Regex("\"deleted\"\\s*:\\s*true")
+    // 只有真正改写的少量记录需要这个正则；常规字段读取全部走字符串扫描。
     private val UPDATED_AT_ANY = Regex("\"updatedAt\"\\s*:\\s*-?\\d+")
-    private val UPDATED_AT_WITH_COMMA = Regex(",\\s*\"updatedAt\"\\s*:\\s*-?\\d+")
 
     fun parse(json: String): Map<String, Entry> {
         val out = LinkedHashMap<String, Entry>()
@@ -156,7 +153,19 @@ object Merge {
     }
 
     private fun sameContent(a: String, b: String): Boolean =
-        UPDATED_AT_WITH_COMMA.replace(a, "") == UPDATED_AT_WITH_COMMA.replace(b, "")
+        withoutUpdatedAt(a) == withoutUpdatedAt(b)
+
+    private fun withoutUpdatedAt(value: String): String {
+        val idx = value.indexOf("\"updatedAt\"")
+        if (idx < 0) return value
+        var start = idx
+        while (start > 0 && (value[start - 1].isWhitespace() || value[start - 1] == ',')) start--
+        var end = idx + 11
+        while (end < value.length && (value[end] == ':' || value[end].isWhitespace())) end++
+        if (end < value.length && value[end] == '-') end++
+        while (end < value.length && value[end].isDigit()) end++
+        return value.substring(0, start) + value.substring(end)
+    }
 
     private fun withUpdatedAt(value: String, now: Long): String {
         val match = UPDATED_AT_ANY.find(value)
@@ -169,9 +178,22 @@ object Merge {
     private fun newer(a: Entry, b: Entry): Boolean =
         if (a.updatedAt != b.updatedAt) a.updatedAt > b.updatedAt else a.value > b.value
 
-    private fun numberField(value: String): Long =
-        UPDATED_AT_FIELD.find(value)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+    private fun numberField(value: String): Long {
+        val idx = value.indexOf("\"updatedAt\"")
+        if (idx < 0) return 0L
+        var i = idx + 11
+        while (i < value.length && (value[i] == ':' || value[i].isWhitespace())) i++
+        val start = i
+        if (i < value.length && value[i] == '-') i++
+        while (i < value.length && value[i].isDigit()) i++
+        return value.substring(start, i).toLongOrNull() ?: 0L
+    }
 
-    private fun boolField(value: String): Boolean =
-        DELETED_FIELD.containsMatchIn(value)
+    private fun boolField(value: String): Boolean {
+        val idx = value.indexOf("\"deleted\"")
+        if (idx < 0) return false
+        var i = idx + 9
+        while (i < value.length && (value[i] == ':' || value[i].isWhitespace())) i++
+        return value.startsWith("true", i)
+    }
 }
