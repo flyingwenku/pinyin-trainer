@@ -9,6 +9,12 @@ package com.fred.pinyin.sync
  */
 object Merge {
     data class Entry(val value: String, val updatedAt: Long, val deleted: Boolean)
+    data class AnnotateResult(val json: String, val changed: Int, val tombstoned: Int)
+
+    // 避免每条记录都重新编译正则；这是全量标注的主要热点。
+    private val UPDATED_AT_FIELD = Regex("\"updatedAt\"\\s*:\\s*(-?\\d+)")
+    private val DELETED_FIELD = Regex("\"deleted\"\\s*:\\s*true")
+    private val UPDATED_AT_ANY = Regex("\"updatedAt\"\\s*:\\s*-?\\d+")
 
     fun parse(json: String): Map<String, Entry> {
         val out = LinkedHashMap<String, Entry>()
@@ -87,8 +93,8 @@ object Merge {
             val value = json.substring(start, i)
             out[key.toString()] = Entry(
                 value = value,
-                updatedAt = numberField(value, "updatedAt"),
-                deleted = boolField(value, "deleted")
+                updatedAt = numberField(value),
+                deleted = boolField(value)
             )
         }
         return out
@@ -118,16 +124,22 @@ object Merge {
      * 与 PC 端 annotate_local 完全对齐。注意同步下来的merged不能走这里，
      * 否则远端记录的 updatedAt 会被改成“现在”，另一端再也合并不回来。
      */
-    fun annotate(oldJson: String, newJson: String): String {
+    fun annotate(oldJson: String, newJson: String): String =
+        annotateDetailed(oldJson, newJson).json
+
+    fun annotateDetailed(oldJson: String, newJson: String): AnnotateResult {
         val old = parse(oldJson)
         val fresh = parse(newJson)
         val now = System.currentTimeMillis()
         val out = LinkedHashMap<String, Entry>()
+        var changed = 0
+        var tombstoned = 0
         for ((key, e) in fresh) {
             val prior = old[key]
             if (prior == null || prior.value != e.value || prior.deleted) {
                 val value = withUpdatedAt(e.value, now)
                 out[key] = Entry(value, now, false)
+                changed++
             } else {
                 out[key] = e
             }
@@ -136,13 +148,14 @@ object Merge {
             if (!fresh.containsKey(key) && !e.deleted) {
                 val value = "{\"deleted\":true,\"updatedAt\":$now}"
                 out[key] = Entry(value, now, true)
+                tombstoned++
             }
         }
-        return serialize(out)
+        return AnnotateResult(serialize(out), changed, tombstoned)
     }
 
     private fun withUpdatedAt(value: String, now: Long): String {
-        val match = Regex("\"updatedAt\"\\s*:\\s*-?\\d+").find(value)
+        val match = UPDATED_AT_ANY.find(value)
         if (match != null) return value.replaceRange(match.range, "\"updatedAt\":$now")
         val end = value.lastIndexOf('}')
         return if (end < 0) value else
@@ -152,9 +165,9 @@ object Merge {
     private fun newer(a: Entry, b: Entry): Boolean =
         if (a.updatedAt != b.updatedAt) a.updatedAt > b.updatedAt else a.value > b.value
 
-    private fun numberField(value: String, name: String): Long =
-        Regex("\"$name\"\\s*:\\s*(-?\\d+)").find(value)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+    private fun numberField(value: String): Long =
+        UPDATED_AT_FIELD.find(value)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
 
-    private fun boolField(value: String, name: String): Boolean =
-        Regex("\"$name\"\\s*:\\s*true").containsMatchIn(value)
+    private fun boolField(value: String): Boolean =
+        DELETED_FIELD.containsMatchIn(value)
 }

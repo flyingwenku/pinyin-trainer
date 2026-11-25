@@ -68,19 +68,31 @@ class ProgressStore(context: Context) {
     private fun writeAnnotated(text: String) {
         val t0 = System.currentTimeMillis()
         logger?.invoke("store write start bytes=${text.length}")
+        val tJson = System.currentTimeMillis()
         try {
             JSONObject(text)
         } catch (e: Exception) {
             logger?.invoke("store write invalid json: ${e.message ?: "unknown"}")
             return
         }
+        val jsonMs = System.currentTimeMillis() - tJson
+
         synchronized(lock) {
             // 网页提交的记录必须打本地时间戳，否则手机上的修改永远合并不回去
-            val annotated = Merge.annotate(cache, text)
+            val tAnnotate = System.currentTimeMillis()
+            val result = Merge.annotateDetailed(cache, text)
+            val annotated = result.json
+            val annotateMs = System.currentTimeMillis() - tAnnotate
+
+            val tWrite = System.currentTimeMillis()
             file.writeText(annotated, Charsets.UTF_8)
+            val writeMs = System.currentTimeMillis() - tWrite
+
             cache = annotated
             logger?.invoke(
-                "store write done bytes=${annotated.length} ms=${System.currentTimeMillis() - t0}"
+                "store write done bytes=${annotated.length} jsonMs=$jsonMs" +
+                    " annotateMs=$annotateMs writeMs=$writeMs changed=${result.changed}" +
+                    " tombstoned=${result.tombstoned} totalMs=${System.currentTimeMillis() - t0}"
             )
         }
     }
