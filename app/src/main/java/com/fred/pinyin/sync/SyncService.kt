@@ -4,20 +4,37 @@ import com.fred.pinyin.data.ProgressStore
 import com.fred.pinyin.data.SyncPrefs
 
 /** 必须在后台线程调用：一次 GET → 合并 → 有变化才一次 PUT。 */
-class SyncService(private val store: ProgressStore, private val prefs: SyncPrefs) {
+class SyncService(
+    private val store: ProgressStore,
+    private val prefs: SyncPrefs,
+    private val log: (String) -> Unit = {}
+) {
     fun syncNow(): String {
-        if (!prefs.ready) return "未配置同步账号"
+        if (!prefs.ready) {
+            log("sync skip: account not configured")
+            return "未配置同步账号"
+        }
         val dav = WebDav(prefs.url, prefs.user, prefs.password)
         return try {
+            val local = store.all()
+            log("sync start localChars=${Merge.parse(local).size} localBytes=${local.length}")
             val fetched = dav.fetch()
             val remote = if (fetched.exists && fetched.content != null) fetched.content!! else "{}"
-            val merged = Merge.merge(store.all(), remote)
+            log("sync fetch exists=${fetched.exists} remoteChars=${Merge.parse(remote).size} remoteBytes=${remote.length}")
+            val merged = Merge.merge(local, remote)
+            val needPut = merged != remote
+            log("sync merge mergedChars=${Merge.parse(merged).size} put=$needPut")
 
-            if (merged != remote) dav.put(merged)
+            if (needPut) {
+                dav.put(merged)
+                log("sync put ok bytes=${merged.length}")
+            }
             store.replaceSynced(merged)
+            log("sync store ok")
             prefs.lastSyncAt = System.currentTimeMillis()
             "同步完成"
         } catch (e: Exception) {
+            log("sync error: ${e.message ?: "unknown"}")
             prefs.lastSyncAt = System.currentTimeMillis()
             "同步失败：${e.message ?: "未知错误"}"
         }

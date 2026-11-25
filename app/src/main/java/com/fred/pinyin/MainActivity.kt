@@ -3,6 +3,8 @@ package com.fred.pinyin
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -15,6 +17,7 @@ import android.webkit.WebViewClient
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
+import com.fred.pinyin.data.AppLog
 import com.fred.pinyin.data.ProgressStore
 import com.fred.pinyin.data.SyncPrefs
 import com.fred.pinyin.sync.SyncService
@@ -22,6 +25,8 @@ import com.fred.pinyin.sync.SyncService
 class MainActivity : Activity() {
     private lateinit var store: ProgressStore
     private lateinit var prefs: SyncPrefs
+    private lateinit var logStore: AppLog
+    private lateinit var web: WebView
     private val handler = Handler(Looper.getMainLooper())
     private val syncRunnable = Runnable { doSync() }
 
@@ -31,8 +36,10 @@ class MainActivity : Activity() {
 
         store = ProgressStore(this)
         prefs = SyncPrefs(this)
+        logStore = AppLog(this)
+        logStore.add("app start")
 
-        val web = WebView(this)
+        web = WebView(this)
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
         web.settings.allowFileAccess = true
@@ -67,8 +74,12 @@ class MainActivity : Activity() {
 
     private fun doSync() {
         Thread {
-            val message = SyncService(store, prefs).syncNow()
-            runOnUiThread { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
+            val message = SyncService(store, prefs) { logStore.add(it) }.syncNow()
+            val ok = message == "同步完成"
+            runOnUiThread {
+                if (ok) web.evaluateJavascript("window.onProgressSynced && window.onProgressSynced();", null)
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            }
         }.start()
     }
 
@@ -101,25 +112,65 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun showLogsDialog() {
+        val box = EditText(this).apply {
+            setText(logStore.all())
+            setTextIsSelectable(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minHeight = 360
+        }
+        AlertDialog.Builder(this)
+            .setTitle("调试日志")
+            .setView(box)
+            .setPositiveButton("复制") { _, _ ->
+                val clip = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                clip.primaryClip = ClipData.newPlainText("pinyin-debug-log", box.text.toString())
+                Toast.makeText(this, "日志已复制", Toast.LENGTH_SHORT).show()
+            }
+            .setNeutralButton("清空") { _, _ ->
+                logStore.clear()
+                Toast.makeText(this, "日志已清空", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
     inner class JsBridge {
         @JavascriptInterface
-        fun loadProgress(): String = store.all()
+        fun log(message: String) {
+            logStore.add("js $message")
+        }
+
+        @JavascriptInterface
+        fun loadProgress(): String {
+            val json = store.all()
+            logStore.add("bridge loadProgress bytes=${json.length}")
+            return json
+        }
 
         @JavascriptInterface
         fun saveProgress(json: String) {
+            val t0 = System.currentTimeMillis()
             store.replaceAll(json)
+            logStore.add("bridge saveProgress bytes=${json.length} ms=${System.currentTimeMillis() - t0}")
             handler.removeCallbacks(syncRunnable)
             handler.postDelayed(syncRunnable, 10_000)
         }
 
         @JavascriptInterface
         fun syncNow() {
+            logStore.add("bridge syncNow")
             doSync()
         }
 
         @JavascriptInterface
         fun openSettings() {
             runOnUiThread { showSyncDialog() }
+        }
+
+        @JavascriptInterface
+        fun showLogs() {
+            runOnUiThread { showLogsDialog() }
         }
     }
 }

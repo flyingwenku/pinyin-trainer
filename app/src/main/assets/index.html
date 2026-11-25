@@ -86,7 +86,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>拼音纠错练习<button id="settingsBtn" style="float:right;font-size:12px;padding:4px 10px;margin-left:6px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--sub);">设置</button><button id="syncBtn" style="float:right;font-size:12px;padding:4px 10px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--blue);">同步</button></h1>
+    <h1>拼音纠错练习<button id="logBtn" style="float:right;font-size:12px;padding:4px 10px;margin-left:6px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--sub);">日志</button><button id="settingsBtn" style="float:right;font-size:12px;padding:4px 10px;margin-left:6px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--sub);">设置</button><button id="syncBtn" style="float:right;font-size:12px;padding:4px 10px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--blue);">同步</button></h1>
     <div class="stats">
       <span>范围 <b id="sScope">0</b></span>
       <span>待练 <b id="sPending">0</b></span>
@@ -146,9 +146,38 @@ const state = {
 };
 let autoNextTimer = null;
 
+let logSeq = 0;
+let latestRemoteRecord = null;
+function logEvent(name, extra){
+  try{
+    if(window.PinyinBridge && window.PinyinBridge.log){
+      window.PinyinBridge.log('['+(++logSeq)+'] '+name+(extra?' '+extra:''));
+    }
+  }catch(e){}
+}
+function visibleJson(raw){
+  try{
+    const obj=JSON.parse(raw || '{}'), out={};
+    Object.keys(obj).forEach(function(k){
+      const r=obj[k];
+      if(r && !r.deleted) out[k]=r;
+    });
+    return JSON.stringify(out);
+  }catch(e){ return '{}'; }
+}
+function rawProgress(){
+  if(window.PinyinBridge && window.PinyinBridge.loadProgress){
+    try{ return window.PinyinBridge.loadProgress() || '{}'; }catch(e){ return '{}'; }
+  }
+  if(latestRemoteRecord) return latestRemoteRecord;
+  try{ return JSON.stringify(INITIAL_RECORD || {}); }catch(e){ return '{}'; }
+}
 function loadRecord(){
   let raw = {};
-  try{ raw = JSON.parse(JSON.stringify(INITIAL_RECORD || {})); }catch(e){ raw = {}; }
+  try{
+    const progress = rawProgress();
+    raw = typeof progress === 'string' ? JSON.parse(progress || '{}') : JSON.parse(JSON.stringify(progress || {}));
+  }catch(e){ raw = {}; }
   const rec = {};
   Object.keys(raw).forEach(function(k){
     const r = raw[k];
@@ -163,12 +192,21 @@ function loadRecord(){
   return rec;
 }
 function saveRecord(){
+  const t0 = performance.now();
   const json = JSON.stringify(state.recordMap);
+  let localMs = performance.now() - t0;
+  let saveStart = 0;
   localStorage.setItem('py_record', json);
   window._saveChain = (window._saveChain || Promise.resolve()).then(function(){
+    saveStart = performance.now();
     if(window.PinyinBridge) return window.PinyinBridge.saveProgress(json);
     return fetch('/api/progress', {method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'}, body:json});
-  }).catch(function(){});
+  }).then(function(){
+    logEvent('saveRecord', 'chars='+Object.keys(state.recordMap).length+
+      ' localMs='+localMs.toFixed(1)+' saveMs='+(performance.now()-saveStart).toFixed(1));
+  }).catch(function(e){
+    logEvent('saveRecordError', String((e && e.message) || e));
+  });
 }
 
 const SESSION_KEY = 'py_session';
@@ -197,11 +235,12 @@ function ensureRecord(it){
 }
 
 /* ---------- 数据 / 过滤 ---------- */
-function allItems(){
+const ALL_ITEMS = (function(){
   const out=[];
   GROUP_KEYS.forEach(k=>DATA[k].items.forEach(it=>out.push(Object.assign({_g:k},it))));
   return out;
-}
+})();
+function allItems(){ return ALL_ITEMS; }
 function filterTokens(){
   if(!state.filter || state.filter==='all') return null;
   const t=state.filter.split('|').map(x=>x.trim().toLowerCase()).filter(Boolean);
@@ -214,10 +253,16 @@ function matchFilter(it){
   const py=(it.a||[]).map(x=>String(x).toLowerCase());
   return py.some(p=>toks.some(t=>p.indexOf(t)===0));
 }
+let scopeCacheKey = null;
+let scopeCache = [];
 function scopeItems(){
-  const out=allItems().filter(matchFilter);
+  const key=state.filter || 'all';
+  if(scopeCacheKey === key) return scopeCache;
+  const out=ALL_ITEMS.filter(matchFilter);
   const seen=new Set();
-  return out.filter(it=>seen.has(it.c)?false:seen.add(it.c));
+  scopeCacheKey = key;
+  scopeCache = out.filter(it=>seen.has(it.c)?false:seen.add(it.c));
+  return scopeCache;
 }
 function shuffleArr(a){
   for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
@@ -250,6 +295,7 @@ function renderFilterBar(){
   document.querySelectorAll('.chip').forEach(el=>el.onclick=()=>setFilter(el.dataset.f));
 }
 function setFilter(f){
+  const t0=performance.now();
   state.filter=f||'all';
   $('filterInput').value=state.filter==='all'?'':state.filter;
   renderFilterBar();
@@ -259,6 +305,7 @@ function setFilter(f){
   $('practiceView').style.display='flex';
   updateStats();
   showCard();
+  logEvent('filter', 'value='+state.filter+' scope='+scopeItems().length+' ms='+(performance.now()-t0).toFixed(1));
 }
 
 function nextInView(from){
@@ -316,17 +363,20 @@ function dropAfter(it){
 }
 
 function submit(){
+  const t0=performance.now();
   if(!state.current || state.answered) return;
   const input=norm($('answer').value);
   if(!input) return;
   const it=state.current, r=ensureRecord(it);
   const ok=it.a.map(x=>norm(x)).some(a=>a===input || a.indexOf(input)===0);
+  const judgeMs=performance.now()-t0;
   state.answered=true;
   const fb=$('feedback');
+  let gap=0;
   if(ok){
     r.remain=Math.max(0, r.remain-1);
     if(r.remain===0) dropAfter(it);
-    else requeue(it);
+    else gap=requeue(it);
     saveRecord();
     fb.className='feedback ok';
     fb.innerHTML=`<div class="fb-title">✓ 正确 · 还需 ${r.remain} 次 · 即将进入下一题</div><div class="py">${it.t.join(' / ')}</div>`;
@@ -334,12 +384,16 @@ function submit(){
   }else{
     r.remain=Math.max(3, r.remain+1);
     saveRecord();
-    requeue(it);
+    gap=requeue(it);
     fb.className='feedback no';
     const alt=it.a.length>1?`<div class="alt">其他读音：${it.a.slice(1).join(' / ')}</div>`:'';
     fb.innerHTML=`<div class="fb-title">✗ 正确拼音（还需 ${r.remain} 次）· 再按一次回车进入下一题</div><div class="py">${it.t.join(' / ')}</div>${alt}`;
   }
+  const tStats=performance.now();
   updateStats();
+  const statsMs=performance.now()-tStats;
+  logEvent('answer', 'char='+it.c+' ok='+ok+' remain='+r.remain+' gap='+gap+
+    ' judgeMs='+judgeMs.toFixed(1)+' statsMs='+statsMs.toFixed(1)+' totalMs='+(performance.now()-t0).toFixed(1));
 }
 function next(){
   clearAutoNext();
@@ -399,6 +453,7 @@ function startRound(){
 }
 function init(){
   const saved=restoreSession();
+  if(!localStorage.getItem('py_record')) localStorage.setItem('py_record', JSON.stringify(INITIAL_RECORD||{}));
   $('filterInput').value=state.filter==='all'?'':state.filter;
   renderFilterBar();
   if(!saved) buildQueue(false);
@@ -407,6 +462,34 @@ function init(){
   $('wrongView').style.display='none';
   $('practiceView').style.display='flex';
   updateStats(); showCard();
+}
+
+window.onProgressSynced = function(){
+  const t0=performance.now();
+  try{
+    state.recordMap=loadRecord();
+    buildQueue(false);
+    $('resultView').classList.remove('show');
+    $('wrongView').style.display='none';
+    $('practiceView').style.display='flex';
+    updateStats(); showCard();
+    logEvent('progressSynced', 'chars='+Object.keys(state.recordMap).length+
+      ' ms='+(performance.now()-t0).toFixed(1));
+  }catch(e){
+    logEvent('progressSyncError', String((e && e.message) || e));
+  }
+};
+
+if(!window.PinyinBridge && location.protocol.indexOf('http')===0){
+  setInterval(function(){
+    fetch('/api/progress').then(function(r){ return r.json(); }).then(function(remote){
+      const raw=JSON.stringify(remote);
+      if(visibleJson(raw) === JSON.stringify(state.recordMap)) return;
+      latestRemoteRecord = raw;
+      logEvent('remoteProgressChanged', 'bytes='+raw.length);
+      window.onProgressSynced();
+    }).catch(function(){});
+  }, 5000);
 }
 
 /* ---------- 事件 ---------- */
@@ -425,6 +508,7 @@ $('clearWrongBtn').onclick=()=>{
 $('filterInput').addEventListener('change', ()=>setFilter($('filterInput').value));
 $('filterInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); setFilter($('filterInput').value); } });
 $('filterClear').onclick=()=>setFilter('all');
+if($('logBtn')) $('logBtn').onclick=()=>window.PinyinBridge.showLogs();
 
 $('syncBtn').onclick = () => window.PinyinBridge.syncNow(); $('settingsBtn').onclick = () => window.PinyinBridge.openSettings();
 init();
