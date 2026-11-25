@@ -121,4 +121,20 @@ class MergeTest {
         assertEquals(1, result.changed)
         assertEquals(0, result.tombstoned)
     }
+
+    @Test
+    fun `annotate does not stamp untouched defaults on first save`() {
+        val fresh = doc("甲" to """{"c":"甲","remain":3}""")
+        val result = Merge.annotateDetailed("{}", fresh)
+        assertEquals(0, result.changed)
+        assertEquals(0L, Merge.parse(result.json)["甲"]!!.updatedAt)
+    }
+
+    @Test
+    fun `untouched local default cannot override remote progress`() {
+        val local = doc("甲" to """{"c":"甲","remain":3}""")
+        val remote = doc("甲" to """{"c":"甲","remain":0,"updatedAt":2000}""")
+        val merged = Merge.parse(Merge.merge(local, remote))
+        assertTrue(merged["甲"]!!.value.contains("\"remain\":0"))
+    }
 }

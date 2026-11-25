@@ -134,7 +134,10 @@ object Merge {
         var tombstoned = 0
         for ((key, e) in fresh) {
             val prior = old[key]
-            if (prior == null || !sameContent(prior.value, e.value) || prior.deleted) {
+            if (prior == null && isUntouchedDefault(e)) {
+                // 页面为了统计会补齐所有默认 remain=3 的字；它们不是用户修改，不能打时间戳。
+                out[key] = e
+            } else if (prior == null || !sameContent(prior.value, e.value) || prior.deleted) {
                 val value = withUpdatedAt(e.value, now)
                 out[key] = Entry(value, now, false)
                 changed++
@@ -151,6 +154,9 @@ object Merge {
         }
         return AnnotateResult(serialize(out), changed, tombstoned)
     }
+
+    private fun isUntouchedDefault(e: Entry): Boolean =
+        e.updatedAt == 0L && !e.deleted && e.value.contains("\"remain\":3")
 
     private fun sameContent(a: String, b: String): Boolean =
         withoutUpdatedAt(a) == withoutUpdatedAt(b)
