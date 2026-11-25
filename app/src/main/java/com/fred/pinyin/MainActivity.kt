@@ -12,6 +12,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
@@ -84,26 +85,39 @@ class MainActivity : Activity() {
             hint = "应用密码"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
+        val debug = CheckBox(this).apply {
+            text = "记录调试日志（默认关闭）"
+            isChecked = logStore.enabled
+        }
         box.addView(url)
         box.addView(user)
         box.addView(pass)
+        box.addView(debug)
 
         AlertDialog.Builder(this)
             .setTitle("同步设置")
             .setView(box)
             .setPositiveButton("保存") { _, _ ->
-                prefs.url = url.text.toString().trim()
-                prefs.user = user.text.toString().trim()
-                prefs.password = pass.text.toString()
-                doSync()
+                val newUrl = url.text.toString().trim()
+                val newUser = user.text.toString().trim()
+                val newPass = pass.text.toString()
+                val changed = newUrl != prefs.url || newUser != prefs.user || newPass != prefs.password
+                prefs.url = newUrl
+                prefs.user = newUser
+                prefs.password = newPass
+                logStore.enabled = debug.isChecked
+                // 只改了日志开关时不必触发一次网络同步
+                if (changed) doSync()
             }
             .setNegativeButton("取消", null)
             .show()
     }
 
     private fun showLogsDialog() {
+        val body = if (logStore.enabled) logStore.all()
+        else "调试日志已关闭，可在“同步设置”中勾选开启。\n\n" + logStore.all()
         val box = EditText(this).apply {
-            setText(logStore.all())
+            setText(body)
             setTextIsSelectable(true)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             minHeight = 360

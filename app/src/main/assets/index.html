@@ -155,12 +155,16 @@ function logEvent(name, extra){
     }
   }catch(e){}
 }
-function visibleJson(raw){
+/* 内容指纹：忽略 updatedAt、键序和墓碑，只比较用户可见的练习进度 */
+function recordFingerprint(raw){
   try{
     const obj=JSON.parse(raw || '{}'), out={};
-    Object.keys(obj).forEach(function(k){
+    Object.keys(obj).sort().forEach(function(k){
       const r=obj[k];
-      if(r && !r.deleted) out[k]=r;
+      if(!r || r.deleted) return;
+      const v={};
+      Object.keys(r).sort().forEach(function(f){ if(f!=='updatedAt') v[f]=r[f]; });
+      out[k]=v;
     });
     return JSON.stringify(out);
   }catch(e){ return '{}'; }
@@ -191,20 +195,24 @@ function loadRecord(){
   });
   return rec;
 }
+let saveInFlight = 0;
 function saveRecord(){
   const t0 = performance.now();
   const json = JSON.stringify(state.recordMap);
   let localMs = performance.now() - t0;
   let saveStart = 0;
   localStorage.setItem('py_record', json);
+  saveInFlight++;
   window._saveChain = (window._saveChain || Promise.resolve()).then(function(){
     saveStart = performance.now();
     if(window.PinyinBridge) return window.PinyinBridge.saveProgress(json);
     return fetch('/api/progress', {method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'}, body:json});
   }).then(function(){
+    saveInFlight--;
     logEvent('saveRecord', 'chars='+Object.keys(state.recordMap).length+
       ' localMs='+localMs.toFixed(1)+' saveMs='+(performance.now()-saveStart).toFixed(1));
   }).catch(function(e){
+    saveInFlight--;
     logEvent('saveRecordError', String((e && e.message) || e));
   });
 }
@@ -466,14 +474,24 @@ function init(){
 window.onProgressSynced = function(){
   const t0=performance.now();
   try{
+    const practicing=$('practiceView').style.display!=='none';
+    const cur=state.current?state.current.c:null;
+    const draft=$('answer').value;
     state.recordMap=loadRecord();
-    buildQueue(false);
-    $('resultView').classList.remove('show');
-    $('wrongView').style.display='none';
-    $('practiceView').style.display='flex';
-    updateStats(); showCard();
+    // 答题中只刷新记录，不重建队列：换字会把正在敲的答案判到别的字上
+    const keepCard=practicing && cur && !state.answered && !!state.recordMap[cur];
+    if(keepCard){
+      $('answer').value=draft;
+      updateStats();
+    }else{
+      buildQueue(false);
+      $('resultView').classList.remove('show');
+      $('wrongView').style.display='none';
+      $('practiceView').style.display='flex';
+      updateStats(); showCard();
+    }
     logEvent('progressSynced', 'chars='+Object.keys(state.recordMap).length+
-      ' ms='+(performance.now()-t0).toFixed(1));
+      ' kept='+(keepCard?1:0)+' ms='+(performance.now()-t0).toFixed(1));
   }catch(e){
     logEvent('progressSyncError', String((e && e.message) || e));
   }
@@ -481,9 +499,10 @@ window.onProgressSynced = function(){
 
 if(!window.PinyinBridge && location.protocol.indexOf('http')===0){
   setInterval(function(){
+    if(saveInFlight>0) return;   // 本地还有没落盘的改动，别拿旧数据覆盖
     fetch('/api/progress').then(function(r){ return r.json(); }).then(function(remote){
       const raw=JSON.stringify(remote);
-      if(visibleJson(raw) === JSON.stringify(state.recordMap)) return;
+      if(recordFingerprint(raw) === recordFingerprint(JSON.stringify(state.recordMap))) return;
       latestRemoteRecord = raw;
       logEvent('remoteProgressChanged', 'bytes='+raw.length);
       window.onProgressSynced();

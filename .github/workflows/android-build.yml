@@ -118,7 +118,7 @@ jobs:
       - name: Build summary
         run: |
           {
-            echo "## 一句 构建成功"
+            echo "## 拼音纠错练习 构建成功"
             echo ""
             echo "| 项 | 值 |"
             echo "|---|---|"
