@@ -97,24 +97,19 @@
   <div class="bar"><i id="barFill"></i></div>
 
   <div class="filterbar">
-    <input id="filterInput" type="text" placeholder="拼音过滤，如 n 或 n|r|l 或 zhan|nong|ge" autocomplete="off" spellcheck="false">
+    <input id="filterInput" type="text" placeholder="拼音前缀过滤，如 n 或 n|r|l 或 zhan|nong|ge" autocomplete="off" spellcheck="false">
     <button id="filterClear">清除</button>
   </div>
   <div class="filters" id="filters"></div>
 
   <div class="card" id="practiceView">
     <div class="char" id="charEl">字</div>
-    <div class="hint" id="hintEl">输入该字拼音（不带声调）</div>
+    <div class="hint" id="hintEl">输入拼音后按回车提交</div>
     <div class="input-row">
       <input id="answer" type="text" inputmode="latin" autocomplete="off" autocapitalize="off"
-        autocorrect="off" spellcheck="false">
-      <button class="primary" id="submitBtn">确认</button>
+        autocorrect="off" spellcheck="false" placeholder="输入拼音，回车提交">
     </div>
     <div class="feedback" id="feedback"></div>
-    <div class="actions" id="nextActions" style="display:none">
-      <button id="skipBtn">跳过</button>
-      <button id="nextBtn">下一题 →</button>
-    </div>
   </div>
 
   <div class="panel" id="resultView">
@@ -149,6 +144,7 @@ const state = {
   answered: false,
   recordMap: loadRecord(),
 };
+let autoNextTimer = null;
 
 function loadRecord(){
   let raw = {};
@@ -211,12 +207,12 @@ function filterTokens(){
   const t=state.filter.split('|').map(x=>x.trim().toLowerCase()).filter(Boolean);
   return t.length ? t : null;
 }
-/* 拼音包含匹配：a 为不带声调读音数组 */
+/* 拼音前缀匹配：a 为不带声调读音数组 */
 function matchFilter(it){
   const toks=filterTokens();
   if(!toks) return true;
   const py=(it.a||[]).map(x=>String(x).toLowerCase());
-  return py.some(p=>toks.some(t=>p.indexOf(t)>=0));
+  return py.some(p=>toks.some(t=>p.indexOf(t)===0));
 }
 function scopeItems(){
   const out=allItems().filter(matchFilter);
@@ -227,20 +223,19 @@ function shuffleArr(a){
   for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
 }
 
-/* 一轮队列：范围内的待练字 + 少量已完成字作抽查；走完还有待练字则只重建待练字 */
+/* onlyPending=true：只取待练字，一轮能走完；false：首次/切过滤，混入少量已完成字抽查 */
 function buildQueue(onlyPending){
   const scope=scopeItems();
-  let pending=scope.filter(it=>(ensureRecord(it).remain)>0);
-  let done=scope.filter(it=>ensureRecord(it).remain===0);
-  if(onlyPending) done=[];
-  else{ shuffleArr(done); done=done.slice(0, Math.min(done.length, 12)); }
+  const pending=scope.filter(it=>ensureRecord(it).remain>0);
   shuffleArr(pending);
-  state.queue=pending.concat(done);
-  state.viewPos=0;
-  if(!state.queue.length && pending.length===0 && scope.length>0){
-    // 范围内全完成：也放少量抽查，保证还能继续练
-    shuffleArr(scope); state.queue=scope.slice(0, Math.min(scope.length,12));
+  if(onlyPending){
+    state.queue=pending;
+  }else{
+    const done=scope.filter(it=>ensureRecord(it).remain===0);
+    shuffleArr(done);
+    state.queue=pending.concat(done.slice(0, Math.min(done.length,12)));
   }
+  state.viewPos=0;
 }
 
 function pendingInScope(){ return scopeItems().filter(it=>ensureRecord(it).remain>0).length; }
@@ -267,22 +262,24 @@ function setFilter(f){
 }
 
 function nextInView(from){
-  const n=state.queue.length;
-  for(let k=0;k<n;k++){ const i=(from+k)%n; if(matchFilter(state.queue[i])) return i; }
+  for(let i=from;i<state.queue.length;i++){ if(matchFilter(state.queue[i])) return i; }
   return -1;
 }
+function clearAutoNext(){
+  if(autoNextTimer){ clearTimeout(autoNextTimer); autoNextTimer=null; }
+}
 function showCard(){
+  clearAutoNext();
   const hit=nextInView(state.viewPos);
   if(hit<0){ showDone(); return; }
   state.viewPos=hit;
   state.current=state.queue[hit];
   state.answered=false;
   $('charEl').textContent=state.current.c;
-  $('hintEl').textContent=`输入拼音（不带声调）· 还需练 ${ensureRecord(state.current).remain} 次`;
+  $('hintEl').textContent=`输入拼音（不带声调）· 回车提交 · 还需练 ${ensureRecord(state.current).remain} 次`;
   $('answer').value='';
   $('feedback').className='feedback'; $('feedback').innerHTML='';
-  $('nextActions').style.display='none';
-  $('submitBtn').disabled=false; $('answer').disabled=false;
+  $('answer').disabled=false;
   updateStats();
   setTimeout(()=>$('answer').focus(),50);
 }
@@ -296,11 +293,22 @@ function updateStats(){
   $('barFill').style.width=scope.length?(done/scope.length*100)+'%':'0';
   saveSession();
 }
+/* 间隔重复：remain 越小说明越熟练，重复间隔越长；小范围过滤时按范围上限收敛 */
+function repeatGap(remain){
+  const cap=Math.max(16, Math.floor(scopeItems().length*0.6));
+  let lo, span;
+  if(remain>=4){ lo=10; span=7; }
+  else if(remain===3){ lo=18; span=11; }
+  else if(remain===2){ lo=36; span=17; }
+  else{ lo=72; span=25; }
+  return Math.min(cap, lo+Math.floor(Math.random()*span));
+}
 function requeue(it){
   const at=state.viewPos;
   state.queue=state.queue.filter((q,i)=>!(i>at && q.c===it.c));
-  const gap=2+Math.floor(Math.random()*5);
+  const gap=repeatGap(ensureRecord(it).remain);
   state.queue.splice(Math.min(at+1+gap,state.queue.length),0,it);
+  return gap;
 }
 function dropAfter(it){
   const at=state.viewPos;
@@ -314,7 +322,6 @@ function submit(){
   const it=state.current, r=ensureRecord(it);
   const ok=it.a.map(x=>norm(x)).some(a=>a===input || a.indexOf(input)===0);
   state.answered=true;
-  $('submitBtn').disabled=true;
   const fb=$('feedback');
   if(ok){
     r.remain=Math.max(0, r.remain-1);
@@ -322,22 +329,26 @@ function submit(){
     else requeue(it);
     saveRecord();
     fb.className='feedback ok';
-    fb.innerHTML=`<div class="fb-title">✓ 正确 · 还需 ${r.remain} 次</div><div class="py">${it.t.join(' / ')}</div>`;
+    fb.innerHTML=`<div class="fb-title">✓ 正确 · 还需 ${r.remain} 次 · 即将进入下一题</div><div class="py">${it.t.join(' / ')}</div>`;
+    autoNextTimer=setTimeout(()=>{ autoNextTimer=null; next(); }, 350);
   }else{
     r.remain=Math.max(3, r.remain+1);
     saveRecord();
     requeue(it);
     fb.className='feedback no';
     const alt=it.a.length>1?`<div class="alt">其他读音：${it.a.slice(1).join(' / ')}</div>`:'';
-    fb.innerHTML=`<div class="fb-title">✗ 正确拼音（还需 ${r.remain} 次）</div><div class="py">${it.t.join(' / ')}</div>${alt}`;
+    fb.innerHTML=`<div class="fb-title">✗ 正确拼音（还需 ${r.remain} 次）· 再按一次回车进入下一题</div><div class="py">${it.t.join(' / ')}</div>${alt}`;
   }
-  $('nextActions').style.display='flex';
-  $('skipBtn').style.display='';
-  $('nextBtn').textContent='下一题 →';
   updateStats();
 }
 function next(){
-  state.viewPos=(state.viewPos+1)%Math.max(1,state.queue.length);
+  clearAutoNext();
+  state.viewPos++;
+  if(state.viewPos>=state.queue.length){
+    // 一轮走完：还有待练字就只取它们继续，全完成才显示完成页
+    if(pendingInScope()>0){ buildQueue(true); }
+    else{ showDone(); return; }
+  }
   showCard();
 }
 function norm(s){ return (s||'').toLowerCase().replace(/[^a-z]/g,''); }
@@ -356,6 +367,11 @@ function showDone(){
     $('resRow').textContent='范围 '+scope.length+' 字 · 全部完成';
   }
 }
+function clearScopePractice(){
+  const chars=new Set(scopeItems().map(it=>it.c));
+  Object.keys(state.recordMap).forEach(c=>{ if(chars.has(c)) delete state.recordMap[c]; });
+  saveRecord();
+}
 function renderPending(){
   const list=scopeItems().filter(it=>ensureRecord(it).remain>0);
   $('wrongView').style.display='block';
@@ -369,11 +385,13 @@ function backToPractice(){
   $('wrongView').style.display='none';
   $('resultView').classList.remove('show');
   $('practiceView').style.display='flex';
+  // 清空练习或一轮结束后 viewPos 可能在队尾，重建队列才能回到练习
+  if(!state.queue.length || state.viewPos>=state.queue.length) buildQueue(false);
   showCard();
 }
 function startRound(){
   const pending=pendingInScope();
-  buildQueue(pending>0);
+  buildQueue(pending>0);   // 有待练字只练待练；全完成则抽查
   $('resultView').classList.remove('show');
   $('wrongView').style.display='none';
   $('practiceView').style.display='flex';
@@ -392,22 +410,23 @@ function init(){
 }
 
 /* ---------- 事件 ---------- */
-$('submitBtn').onclick=submit;
-$('answer').addEventListener('keydown', e=>{ if(e.key==='Enter' && !state.answered) submit(); });
-$('nextBtn').onclick=next;
-$('skipBtn').onclick=next;
+$('answer').addEventListener('keydown', e=>{
+  if(e.key!=='Enter') return;
+  e.preventDefault();
+  if(state.answered) next(); else submit();
+});
 $('againBtn').onclick=startRound;
 $('toWrongBtn').onclick=renderPending;
 $('backBtn').onclick=backToPractice;
 $('clearWrongBtn').onclick=()=>{
-  state.recordMap={}; saveRecord();
+  clearScopePractice();
   renderPending(); updateStats();
 };
 $('filterInput').addEventListener('change', ()=>setFilter($('filterInput').value));
 $('filterInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); setFilter($('filterInput').value); } });
 $('filterClear').onclick=()=>setFilter('all');
-$('syncBtn').onclick = () => window.PinyinBridge.syncNow(); $('settingsBtn').onclick = () => window.PinyinBridge.openSettings();
 
+$('syncBtn').onclick = () => window.PinyinBridge.syncNow(); $('settingsBtn').onclick = () => window.PinyinBridge.openSettings();
 init();
 </script>
 </body>
