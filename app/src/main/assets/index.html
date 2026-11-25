@@ -46,6 +46,13 @@
     color:#fff; font-size:16px; cursor:pointer;}
   button.primary:active{opacity:.85;}
 
+  /* 本次（临时）答错的字，刷新即清空 */
+  .session-wrong{display:none; width:100%; margin-top:16px; flex-wrap:wrap; gap:8px; align-content:flex-start;}
+  .session-wrong .sw-title{width:100%; font-size:12px; color:var(--sub); margin-bottom:2px;}
+  .session-wrong .sw{display:flex; align-items:baseline; gap:6px; padding:5px 10px; border-radius:10px;
+    background:#fdeeee; border:1px solid #f6d0d2; color:var(--red); font-size:12.5px; line-height:1.2;}
+  .session-wrong .sw b{font-size:17px; font-weight:700;}
+
   .feedback{width:100%; margin:0 0 10px; border-radius:10px; padding:8px 12px; display:none;}
   .feedback.ok{display:block; background:#ecf9f0;}
   .feedback.no{display:block; background:#fdeeee;}
@@ -110,6 +117,7 @@
       <input id="answer" type="text" inputmode="latin" autocomplete="off" autocapitalize="off"
         autocorrect="off" spellcheck="false" placeholder="输入拼音，回车提交">
     </div>
+    <div class="session-wrong" id="sessionWrong"></div>
   </div>
 
   <div class="panel" id="resultView">
@@ -145,6 +153,7 @@ const state = {
   recordMap: loadRecord(),
 };
 let autoNextTimer = null;
+let sessionWrong = [];   // 本次练习答错的字，仅内存、刷新或换过滤即清空
 
 let logSeq = 0;
 let latestRemoteRecord = null;
@@ -304,6 +313,8 @@ function renderFilterBar(){
 }
 function setFilter(f){
   const t0=performance.now();
+  sessionWrong=[];
+  renderSessionWrong();
   state.filter=f||'all';
   $('filterInput').value=state.filter==='all'?'':state.filter;
   renderFilterBar();
@@ -391,6 +402,7 @@ function submit(){
     autoNextTimer=setTimeout(()=>{ autoNextTimer=null; next(); }, 350);
   }else{
     r.remain=Math.max(3, r.remain+1);
+    addSessionWrong(it);
     saveRecord();
     gap=requeue(it);
     fb.className='feedback no';
@@ -401,6 +413,20 @@ function submit(){
   const statsMs=performance.now()-tStats;
   logEvent('answer', 'char='+it.c+' ok='+ok+' remain='+r.remain+' gap='+gap+
     ' judgeMs='+judgeMs.toFixed(1)+' statsMs='+statsMs.toFixed(1)+' totalMs='+(performance.now()-t0).toFixed(1));
+}
+/* 临时错题：只在内存里，刷新/换过滤即清空，不写进学习记录 */
+function addSessionWrong(it){
+  const hit=sessionWrong.find(x=>x.c===it.c);
+  if(hit) hit.a=it.a.slice(); else sessionWrong.push({c:it.c, a:it.a.slice()});
+  renderSessionWrong();
+}
+function renderSessionWrong(){
+  const el=$('sessionWrong');
+  if(!sessionWrong.length){ el.innerHTML=''; el.style.display='none'; return; }
+  el.style.display='flex';
+  el.innerHTML='<div class="sw-title">本次答错</div>'+sessionWrong.map(function(x){
+    return '<div class="sw"><b>'+x.c+'</b>'+x.a.join(' / ')+'</div>';
+  }).join('');
 }
 function next(){
   clearAutoNext();
